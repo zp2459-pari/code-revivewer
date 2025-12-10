@@ -1,6 +1,2 @@
 __pycache__/
 *.pyc
-*.md
-!README.md
-!CodeReviewerAgent.md
-.env
