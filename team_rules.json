@@ -1,0 +1,37 @@
+[
+  {
+    "category": "architecture",
+    "rule_content": "Controller layer must not import Dao layer structs directly; must call via Service interface.",
+    "severity": "BLOCKER"
+  },
+  {
+    "category": "architecture",
+    "rule_content": "Do not perform database queries inside a loop (N+1 problem).",
+    "severity": "BLOCKER"
+  },
+  {
+    "category": "security",
+    "rule_content": "SQL concatenation is forbidden; use parameterized queries (prepared statements).",
+    "severity": "BLOCKER"
+  },
+  {
+    "category": "security",
+    "rule_content": "Do not hardcode secrets (passwords, tokens) in the code.",
+    "severity": "BLOCKER"
+  },
+  {
+    "category": "naming",
+    "rule_content": "Interface naming in Go usually ends with 'er' (e.g., Reader, Writer).",
+    "severity": "INFO"
+  },
+  {
+    "category": "error_handling",
+    "rule_content": "Do not ignore errors returned by functions (using '_'); handle them explicitly.",
+    "severity": "WARN"
+  },
+  {
+    "category": "concurrency",
+    "rule_content": "Use sync.WaitGroup or Channels for concurrency; avoid time.Sleep for synchronization.",
+    "severity": "WARN"
+  }
+]
