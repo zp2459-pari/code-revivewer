@@ -52,6 +52,9 @@
       1. 利用 LSP (Language Server Protocol) 或 AST 提取代码的依赖关系、调用链和继承关系。
       2. 目的：解决向量检索无法理解“引用依赖”的问题，为后续的“影响面分析”提供精确的数据支撑。
       3. <span style="color: #1E88E5;">**[NEW] 仓库地图 (Repository Map)**</span>：生成压缩的项目骨架图（Tree structure），帮助 Agent 理解文件在项目全局中的位置。
+4. <span style="color: #1E88E5;">**[NEW] 团队规则库 (Team Rules)**：
+   1. 提取显式的团队编码规范（如：禁止使用的第三方库、特定的命名约定、鉴权中间件的强制使用等）。
+   2. 目的：作为硬性约束条件，弥补 LLM 模糊推理的不足。</span>
 
 #### 混合切片 (Hybrid Chunking)
 
@@ -66,7 +69,9 @@
 #### 向量化存储与更新 (Embedding & Upsert)
 
 * 模型选择：使用代码理解能力强的 Embedding 模型（如 OpenAI text-embedding-3-large或CodeBERT）
-* 存储引擎：存入Milvus向量数据库。
+* 存储引擎：
+    * <span style="color: #1E88E5;">**向量数据**：存入 Milvus 向量数据库（处理语义检索）。</span>
+    * <span style="color: #1E88E5;">**[NEW] 结构化元数据**：引入 MySQL 数据库。用于存储明确的 Team Rules（团队规则）、Feedback Loop（用户反馈记录）以及代码图谱的节点关系数据。</span>
 * 动态增量更新机制：代码Merge后自动触发增量更新，确保Agent的知识“与时俱进”（CI/CD触发机制）
 
 
@@ -116,11 +121,12 @@
    3. 策略：将工具输出的JSON报告直接作为“**不可辩驳的事实**”输入给LLM，要求LLM只可解释与补充
 
 2. 软约束对齐：**上下文合规性检查** (Contextual Alignment - The "Soft Truth")
-   1. 执行动作：LLM 结合 Step 2 检索到的RAG 上下文，对代码进行语义级比对。
+   1. 执行动作：LLM 结合 Step 2 检索到的RAG 上下文<span style="color: #1E88E5;">及 MySQL 中的 Team Rules</span>，对代码进行语义级比对。
    2. 核心价值：解决传统工具无法理解“业务规则”的痛点。
       1. 架构一致性：检查是否违反了检索到的《技术设计文档》中的分层约束（例如：“检测到在 Controller 中直接编写了复杂的业务过滤逻辑，违背了文档中定义的 Service 职责下沉原则”）。
       2. 业务逻辑闭环：对比《PRD 文档》中的边界条件（例如：“需求文档提到状态流转需校验用户权限，但当前代码 Diff 中未发现鉴权逻辑”）。
       3. 风格一致性：对比检索到的“相似历史代码”，检查命名习惯和异常处理方式是否与团队过往习惯一致。
+      4. <span style="color: #1E88E5;">**规则匹配**：查询 MySQL 中的团队黑/白名单规则，进行精准阻断（如：检测到引入了未批准的第三方库）。</span>
 
 3. <span style="color: #1E88E5;">**[NEW] 自我反思循环 (Critic Agent / Self-Correction)**</span>
    1. 引入“批评家”角色 (Critic Agent)：在最终输出前，对 Reviewer Agent 生成的建议进行反向校验。
@@ -130,7 +136,7 @@
 
 ### Step 4: Agent Reasoning & Output / 推理与结构化输出
 
-> 目标：输出不仅要对，还要有用
+> 目标：输出不仅要对，还要有用。<span style="color: #1E88E5;">**[NEW] 采用直接输出模式 (Direct Output)，移除 Canvas 交互，便于 CI/CD 集成。**</span>
 
 LLM 根据上述信息生成最终报告，格式如下：
 
@@ -143,7 +149,7 @@ LLM 根据上述信息生成最终报告，格式如下：
    1. 引用：指向具体的架构**文档章节**或相似的**历史PR**链接（“参考上次@UserA修复的 Bug #123”）。
    2. 事实：引用**静态分析**的具体报错行。
 3. 修复建议 (Actionable Advice)：
-   1. 提供具体的Git Patch代码块（可以直接Apply）
+   1. 提供具体的Git Patch代码块（可以直接Apply）<span style="color: #1E88E5;">，直接生成 markdown 或 diff 格式，不依赖前端 Canvas 渲染。</span>
    2. 推荐补充的单元测试用例（针对边缘情况）
    3. 影响面分析：修改此函数可能会影响哪些下游模块 <span style="color: #1E88E5;">（注：利用 Step 1 构建的**代码知识图谱**进行精确的依赖反查，而非仅靠 LLM 猜测）</span>。
 4. 置信度披露 (Confidence & Uncertainty)：
@@ -151,4 +157,4 @@ LLM 根据上述信息生成最终报告，格式如下：
 
 5. <span style="color: #1E88E5;">**[NEW] 反馈闭环 (Feedback Loop)**</span>
    1. 机制：追踪开发者对 Review 建议的操作（接受/拒绝/忽略）。
-   2. 学习：将“被拒绝的建议”作为负样本存入向量库，防止 Agent 在未来重复提出类似的无效建议。
+   2. 学习：将“被拒绝的建议”作为负样本存入<span style="color: #1E88E5;"> MySQL 和向量库</span>，防止 Agent 在未来重复提出类似的无效建议。
