@@ -4,50 +4,37 @@ import requests
 import itertools
 import time
 
+# Ensure 'db' directory is in path for module imports
 sys.path.append("db") 
 
 from logger import log 
 import linter_runner
 from graph_builder import GoKnowledgeGraph
 from db import db
+from git_helper import GitHelper 
 
-
+# ================= CONFIGURATION =================
 API_KEY_LIST = [
-    "***************************"
+    "sk-****************************************" 
 ]
 
 RULES_JSON_PATH = "team_rules.json"
 MODEL_NAME = "deepseek-chat" 
 API_URL = "https://api.deepseek.com/chat/completions"
 
-TARGET_FILE_PATH = "/root/work/project-zero/off-prem-general/common-services/xc1p-cluster-automation/sourceCode/service/profile/checker.go"
-PROJECT_ROOT = "/root/work/project-zero/off-prem-general/common-services/xc1p-cluster-automation/sourceCode/service/profile/"
+# Project Root Directory
+PROJECT_ROOT = "/root/work/project-zero/off-prem-general/common-services/xc1p-cluster-automation"
 OUTPUT_REPORT_PATH = "review_report.md"
 
-MR_DESCRIPTION = """
-Before creating the solution profile, all the parameters for creating the template which include firmware policy, config pattern, os profile will be obtained. 
-We need to combine and check these parameters according to the rules in the flavor. 
-If any of them do not meet the rules, the subsequent creation of the solution profile will be prevented.
+DEFAULT_MR_DESCRIPTION = """
+Generic Refactor or Update. Please infer intent from code changes.
 """
 
-
+# ================= UTILS =================
 key_cycle = itertools.cycle(API_KEY_LIST)
 
 def get_next_key():
     return next(key_cycle)
-
-def read_code_from_file(file_path):
-    try:
-        if not os.path.exists(file_path):
-            log.critical(f"File not found: {file_path}")
-            sys.exit(1)
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            log.info(f"Read code file: {os.path.basename(file_path)} ({len(content)} bytes)")
-            return content
-    except Exception as e:
-        log.critical(f"Failed to read file: {e}")
-        sys.exit(1)
 
 def save_report_to_file(content, file_path):
     try:
@@ -57,43 +44,105 @@ def save_report_to_file(content, file_path):
     except Exception as e:
         log.error(f"Failed to save report: {e}")
 
-
-def analyze_with_deepseek(source_code):
+# ================= MAIN LOGIC =================
+def analyze_changes_with_deepseek():
     current_api_key = get_next_key()
     
-    log.info("Step 0/5: Initializing Database & Syncing Rules...")
+    # --- Step 0: Git Analysis ---
+    log.info("Step 0/6: Analyzing Git Repository...")
     try:
-        # 1. Create tables if missing
+        git = GitHelper(PROJECT_ROOT)
+        
+        # 1. Get full project diff
+        project_diff = git.get_project_diff()
+        if not project_diff or len(project_diff.strip()) == 0:
+            log.warning("No changes detected in Git. Exiting...")
+            return
+
+        # 2. Get list of changed files
+        changed_files_rel = git.get_changed_files()
+        changed_files_abs = [os.path.join(PROJECT_ROOT, f) for f in changed_files_rel]
+        
+        # 3. Get commit context
+        git_intent = git.get_pr_description_context()
+        mr_intent = git_intent if git_intent else DEFAULT_MR_DESCRIPTION
+        
+        log.info(f"Detected {len(changed_files_rel)} changed files.")
+    except Exception as e:
+        log.critical(f"Git Analysis Failed: {e}")
+        sys.exit(1)
+
+    # --- Step 1: Database & Rules ---
+    log.info("Step 1/6: Initializing Database & Syncing Rules...")
+    try:
         db.init_tables()
-        # 2. Load rules from JSON into DB (This updates the DB every time you run)
         db.sync_rules_from_json(RULES_JSON_PATH)
-        # 3. Fetch rules from DB for the Prompt
         team_rules_str = db.get_active_rules()
     except Exception as e:
         log.error(f"Database sync error: {e}")
         team_rules_str = "No specific rules available (DB Error)."
 
-    log.info("Step 1/5: Building Knowledge Graph...")
+    # --- Step 2: Knowledge Graph & Impact Analysis ---
+    log.info("Step 2/6: Building Knowledge Graph & Impact Analysis...")
     kg = GoKnowledgeGraph(PROJECT_ROOT)
+    
+    # NOTE: If you updated graph_builder.py to support incremental updates, 
+    # uncomment the line below:
+    # kg.parse_project(changed_files=changed_files_abs)
     kg.parse_project()
     
-    target_filename = os.path.basename(TARGET_FILE_PATH)
     impact_report = ""
-    
+    affected_functions = []
+
+    # 1. Pre-filter affected functions to avoid performance issues
+    log.info("🔍 Identifying affected functions...")
     for func_name, info in kg.definitions.items():
-        if target_filename in info['file']:
+        # Check if the function's file is in the changed files list
+        for changed_file in changed_files_rel:
+            if changed_file in info['file']:
+                affected_functions.append(func_name)
+                break
+    
+    log.info(f"📊 Found {len(affected_functions)} affected functions. Generating impact report...")
+
+    # 2. Generate report with a safety limit (Circuit Breaker)
+    max_analyze_limit = 10 
+    
+    for i, func_name in enumerate(affected_functions):
+        if i >= max_analyze_limit:
+            log.warning(f"⚠️ Limit reached! Skipping remaining {len(affected_functions) - i} functions.")
+            impact_report += f"\n... (Skipped remaining functions due to limit) ...\n"
+            break
+
+        log.info(f"   [{i+1}/{len(affected_functions)}] Analyzing impact for: {func_name}")
+        try:
             report = kg.format_graph_report(func_name)
             if report:
                 impact_report += report + "\n"
-    
-    if not impact_report:
-        impact_report = "No significant dependencies found."
+        except Exception as e:
+            log.error(f"   ❌ Error analyzing {func_name}: {e}")
 
-    log.info("Step 2/5: Running Static Analysis...")
-    linter_issues = linter_runner.run_golangci_lint(TARGET_FILE_PATH)
-    linter_report_str = linter_runner.format_linter_report(linter_issues, TARGET_FILE_PATH)
+    if not impact_report:
+        impact_report = "No significant dependency impact detected based on changed functions."
+
+    # --- Step 3: Static Analysis ---
+    log.info("Step 3/6: Running Static Analysis on Changed Files...")
+    linter_report_str = ""
+    issue_count = 0
     
-    log.info("Step 3/5: Assembling Contextual Prompt...")
+    for file_path in changed_files_abs:
+        if file_path.endswith(".go") and os.path.exists(file_path):
+            log.info(f"Linting: {os.path.basename(file_path)}")
+            issues = linter_runner.run_golangci_lint(file_path)
+            if issues:
+                linter_report_str += linter_runner.format_linter_report(issues, file_path) + "\n"
+                issue_count += len(issues)
+    
+    if not linter_report_str:
+        linter_report_str = "No static analysis issues found in changed files."
+
+    # --- Step 4: Prompt Assembly ---
+    log.info("Step 4/6: Assembling Contextual Prompt...")
     
     headers = {
         "Content-Type": "application/json",
@@ -103,10 +152,10 @@ def analyze_with_deepseek(source_code):
     system_prompt = "You are an expert Golang Code Reviewer and Software Architect."
     
     user_prompt = f"""
-    Please perform a comprehensive Code Review.
+    Please perform a comprehensive Code Review based on the following Git Diff.
     
-    ### 1. Business Intent (MR Description):
-    "{MR_DESCRIPTION}"
+    ### 1. Business Intent (Commit Context):
+    "{mr_intent}"
 
     ### 2. Team Coding Standards (FROM DATABASE):
     {team_rules_str}
@@ -114,14 +163,14 @@ def analyze_with_deepseek(source_code):
 
     ### 3. Static Analysis Report (HARD TRUTH):
     {linter_report_str}
-    (INSTRUCTION: You MUST address these linter errors.)
+    (INSTRUCTION: You MUST address these linter errors if they appear in the diff.)
 
     ### 4. Code Impact Analysis (Knowledge Graph):
     {impact_report}
 
-    ### 5. Source Code:
-    ```go
-    {source_code}
+    ### 5. Git Diff (The Changes):
+    ```diff
+    {project_diff}
     ```
 
     ### Output Format Requirements:
@@ -137,7 +186,7 @@ def analyze_with_deepseek(source_code):
     - Team Rules Check: ...
     - Logic & Intent Check: ...
     
-    ## Suggestions
+    ## Suggestions (Git Patch or Code Snippets)
     ...
     """
 
@@ -151,7 +200,8 @@ def analyze_with_deepseek(source_code):
         "temperature": 0.1
     }
 
-    log.info(f"Step 4/5: Sending request to DeepSeek ({MODEL_NAME})...")
+    # --- Step 5: LLM Request ---
+    log.info(f"Step 5/6: Sending request to DeepSeek ({MODEL_NAME})...")
     start_time = time.time()
 
     try:
@@ -167,20 +217,22 @@ def analyze_with_deepseek(source_code):
             
             save_report_to_file(content, OUTPUT_REPORT_PATH)
             
+            # --- Step 6: Save Result ---
             verdict = "PASS"
             if "Status: [BLOCKER]" in content:
                 verdict = "BLOCKER"
             elif "Status: [WARN]" in content:
                 verdict = "WARN"
             
-            log.info(f"Step 5/5: Saving record to MySQL (Verdict: {verdict})...")
+            log.info(f"Step 6/6: Saving record to MySQL (Verdict: {verdict})...")
             try:
-                db.save_review_record(TARGET_FILE_PATH, verdict, content)
+                # Using a generic batch name for diff reviews
+                db.save_review_record("GIT_DIFF_BATCH", verdict, content)
             except Exception as e:
                 log.error(f"DB Save failed: {e}")
 
             print("\n" + "="*30 + " AI Review Result " + "="*30 + "\n")
-            print(content[:500] + "\n... (see review_report.md for full details) ...") 
+            print(content[:800] + "\n... (see review_report.md for full details) ...") 
             
         else:
             log.error(f"API Request Failed: Status {response.status_code}")
@@ -199,5 +251,4 @@ if __name__ == "__main__":
         print("Missing dependency. Please run: pip install requests pymysql")
         sys.exit(1)
 
-    code_content = read_code_from_file(TARGET_FILE_PATH)
-    analyze_with_deepseek(code_content)
+    analyze_changes_with_deepseek()
