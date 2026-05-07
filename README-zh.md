@@ -1,5 +1,7 @@
 # Code Review Agent
 
+**中文** | [English](README.md)
+
 多模型支持、子 Agent 架构、Tree-sitter AST 知识图谱、结构化 JSON 输出的 AI 代码审查系统。
 
 - [快速开始](#快速开始)

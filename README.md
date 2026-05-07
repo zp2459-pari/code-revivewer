@@ -1,5 +1,7 @@
 # Code Review Agent
 
+[中文](README-zh.md) | **English**
+
 AI-powered code review system with multi-model support, sub-agent architecture,
 Tree-sitter AST knowledge graph, and structured JSON output.
 
