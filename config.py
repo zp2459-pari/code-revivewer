@@ -28,6 +28,7 @@ class Config:
     SUB_TEMPERATURE: float = float(os.getenv("SUB_TEMPERATURE", "0.3"))
     MAX_DIFF_LENGTH: int = int(os.getenv("MAX_DIFF_LENGTH", "100000"))
     MAX_FILES_PER_BATCH: int = int(os.getenv("MAX_FILES_PER_BATCH", "10"))
+    MAX_REVIEW_TOKENS: int = int(os.getenv("MAX_REVIEW_TOKENS", "4096"))
 
     # === Static Analysis ===
     ENABLE_LINTER: bool = os.getenv("ENABLE_LINTER", "true").lower() == "true"
